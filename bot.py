@@ -1,24 +1,24 @@
 import json
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters,
     ContextTypes, ConversationHandler
 )
 from config import BOT_TOKEN, ADMIN_ID
-import os
-
-DATA_FILE = "data.json"
 
 # States
 LANGUAGE, SELECT_TYPE, AWAITING_CODE = range(3)
-ADMIN_SELECT_TYPE, ADMIN_WAIT_IMAGE, ADMIN_WAIT_TEXT, ADMIN_WAIT_CODE = range(10, 14)
+ADMIN_PANEL, ADMIN_SELECT_TYPE, ADMIN_WAIT_IMAGE, ADMIN_WAIT_TEXT, ADMIN_WAIT_CODE = range(10, 15)
 ADMIN_DELETE_CODE = 20
 
+# User & Admin context
 user_lang = {}
 user_category = {}
 admin_temp = {}
 
-# JSON helpers
+DATA_FILE = "data.json"
+
+# Helpers
 def load_data():
     try:
         with open(DATA_FILE, "r") as f:
@@ -37,38 +37,35 @@ def get_back_button(lang):
         "en": "⬅️ Back"
     }.get(lang, "⬅️ Back")
 
-# Start
+# --- User flow ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["🇺🇿 O'zbek", "🇷🇺 Русский", "🇬🇧 English"]]
-    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text(
         "Tilni tanlang / Выберите язык / Choose language:",
-        reply_markup=markup
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
     return LANGUAGE
 
 async def set_language(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    text = update.message.text.lower()
     user_id = update.message.from_user.id
 
-    if "🇺🇿" in text or "O'zbek" in text.lower():
+    if "uz" in text:
         user_lang[user_id] = "uz"
-    elif "🇷🇺" in text or "Русский" in text or "рус" in text.lower():
+    elif "ru" in text:
         user_lang[user_id] = "ru"
-    elif "🇬🇧" in text or "English" in text.lower():
+    elif "en" in text:
         user_lang[user_id] = "en"
     else:
-        await update.message.reply_text("❗️Iltimos, tugmalardan birini tanlang.")
-        return LANGUAGE
+        return await update.message.reply_text("❗️Iltimos, tugmadan tanlang.")
 
     lang = user_lang[user_id]
     keyboard = [["🎬 Kino", "🎌 Anime"], [get_back_button(lang)]]
-    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
     await update.message.reply_text({
         "uz": "Tanlang: Kino yoki Anime?",
         "ru": "Выберите: Фильм или Аниме?",
-        "en": "Choose: Movie or Anime?",
-    }[lang], reply_markup=markup)
+        "en": "Choose: Movie or Anime?"
+    }[lang], reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
     return SELECT_TYPE
 
 async def select_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -84,40 +81,26 @@ async def select_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "anime" in text:
         user_category[user_id] = "anime"
     else:
-        await update.message.reply_text("❗️Iltimos, Kino yoki Anime ni tanlang.")
-        return SELECT_TYPE
+        return await update.message.reply_text("❗️Kino yoki Anime ni tanlang.")
 
-    keyboard = [[get_back_button(lang)]]
-    markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     await update.message.reply_text({
         "uz": "Kod kiriting:",
         "ru": "Введите код:",
         "en": "Enter the code:"
-    }[lang], reply_markup=markup)
+    }[lang])
     return AWAITING_CODE
 
 async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = update.message.text.strip()
     user_id = update.message.from_user.id
     lang = user_lang.get(user_id, "en")
-
-    if code.lower() in ["⬅️ orqaga", "⬅️ назад", "⬅️ back"]:
-        keyboard = [["🎬 Kino", "🎌 Anime"], [get_back_button(lang)]]
-        markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-        await update.message.reply_text({
-            "uz": "Tanlang: Kino yoki Anime?",
-            "ru": "Выберите: Фильм или Аниме?",
-            "en": "Choose: Movie or Anime:",
-        }[lang], reply_markup=markup)
-        return SELECT_TYPE
-
-    data = load_data()
     category = user_category.get(user_id, "kino")
     full_code = f"{category}_{code}"
 
+    data = load_data()
     if full_code in data:
-        entry = data[full_code]
-        await update.message.reply_photo(photo=entry["image"], caption=entry["text"])
+        content = data[full_code]
+        await update.message.reply_photo(photo=content["image"], caption=content["text"])
     else:
         await update.message.reply_text({
             "uz": "❌ Bunday kod topilmadi.",
@@ -126,14 +109,30 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }[lang])
     return AWAITING_CODE
 
-# Admin qo‘shish
-async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# --- Admin Panel ---
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
-        await update.message.reply_text("Siz admin emassiz.")
-        return ConversationHandler.END
-    keyboard = [["🎬 Kino", "🎌 Anime"]]
-    await update.message.reply_text("🎯 Qaysi turdagi kontent qo‘shmoqchisiz?", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
-    return ADMIN_SELECT_TYPE
+        return await update.message.reply_text("⛔ Siz admin emassiz.")
+    
+    keyboard = [
+        ["➕ Kontent qo‘shish", "❌ Kontent o‘chirish"]
+    ]
+    await update.message.reply_text("🔐 Admin Panelga xush kelibsiz!", reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True))
+    return ADMIN_PANEL
+
+async def handle_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.lower()
+
+    if "qo‘shish" in text or "kontent qo" in text:
+        await update.message.reply_text("🎬 Qaysi turdagi kontent qo‘shmoqchisiz? (Kino yoki Anime)", reply_markup=ReplyKeyboardMarkup([["Kino", "Anime"]], resize_keyboard=True))
+        return ADMIN_SELECT_TYPE
+
+    elif "o‘chirish" in text:
+        await update.message.reply_text("🗑 Kodni kiriting (masalan: anime_naruto01):")
+        return ADMIN_DELETE_CODE
+
+    else:
+        return await update.message.reply_text("❗️Noto‘g‘ri tanlov.")
 
 async def admin_select_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
@@ -142,8 +141,7 @@ async def admin_select_type(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "anime" in text:
         admin_temp["category"] = "anime"
     else:
-        await update.message.reply_text("❗️Iltimos, tugmadan tanlang.")
-        return ADMIN_SELECT_TYPE
+        return await update.message.reply_text("❗️Iltimos, tugmadan tanlang.")
     await update.message.reply_text("📤 Rasm yuboring:")
     return ADMIN_WAIT_IMAGE
 
@@ -171,33 +169,26 @@ async def admin_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_temp.clear()
     return ConversationHandler.END
 
-# Admin delete
-async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        await update.message.reply_text("Siz admin emassiz.")
-        return ConversationHandler.END
-    await update.message.reply_text("❌ O‘chirmoqchi bo‘lgan kontent kodini kiriting (masalan: anime_naruto01):")
-    return ADMIN_DELETE_CODE
-
 async def admin_delete_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
     code = update.message.text.strip()
     data = load_data()
     if code in data:
         del data[code]
         save_data(data)
-        await update.message.reply_text(f"🗑️ '{code}' kodi o‘chirildi.")
+        await update.message.reply_text(f"🗑 '{code}' kodi o‘chirildi.")
     else:
-        await update.message.reply_text("❗️Kod topilmadi.")
+        await update.message.reply_text("❗️Bunday kod topilmadi.")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Bekor qilindi.")
     return ConversationHandler.END
 
+# --- Main ---
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # Foydalanuvchi oqimi
+    # User handler
     user_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -208,32 +199,24 @@ def main():
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # Admin qo‘shish
-    admin_add_conv = ConversationHandler(
-        entry_points=[CommandHandler("add", add_command)],
+    # Admin panel
+    admin_conv = ConversationHandler(
+        entry_points=[CommandHandler("admin", admin_panel)],
         states={
+            ADMIN_PANEL: [MessageHandler(filters.TEXT, handle_admin_panel)],
             ADMIN_SELECT_TYPE: [MessageHandler(filters.TEXT, admin_select_type)],
             ADMIN_WAIT_IMAGE: [MessageHandler(filters.PHOTO, admin_image)],
             ADMIN_WAIT_TEXT: [MessageHandler(filters.TEXT, admin_text)],
             ADMIN_WAIT_CODE: [MessageHandler(filters.TEXT, admin_code)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-
-    # Admin o‘chirish
-    admin_delete_conv = ConversationHandler(
-        entry_points=[CommandHandler("delete", delete_command)],
-        states={
             ADMIN_DELETE_CODE: [MessageHandler(filters.TEXT, admin_delete_code)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
     app.add_handler(user_conv)
-    app.add_handler(admin_add_conv)
-    app.add_handler(admin_delete_conv)
+    app.add_handler(admin_conv)
 
-    print("🤖 Bot ishga tushdi.")
+    print("✅ Bot ishga tushdi.")
     app.run_polling()
 
 if __name__ == "__main__":
